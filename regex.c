@@ -491,8 +491,6 @@ static struct rnode *rnode_atom(char **pat)
 		int mincnt = 0;
 		int maxcnt = 0;
 		char *p;
-		rnode->mincnt = 0;
-		rnode->maxcnt = 0;
 		p = *pat + 1;
 		if (!isdigit((unsigned char) *p)) {
 			rnode_free(rnode);
