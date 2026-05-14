@@ -1,3 +1,21 @@
+/*
+ * NEATLIBC C STANDARD LIBRARY
+ *
+ * Copyright (C) 2010-2020 Ali Gholami Rudi <ali at rudi dot ir>
+ *
+ * Permission to use, copy, modify, and/or distribute this software for any
+ * purpose with or without fee is hereby granted, provided that the above
+ * copyright notice and this permission notice appear in all copies.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+ * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+ */
+
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -470,21 +488,40 @@ static struct rnode *rnode_atom(char **pat)
 		++*pat;
 	}
 	if ((*pat)[0] == '{') {
+		int mincnt = 0;
+		int maxcnt = 0;
+		char *p;
 		rnode->mincnt = 0;
 		rnode->maxcnt = 0;
-		++*pat;
-		while (isdigit((unsigned char) **pat))
-			rnode->mincnt = rnode->mincnt * 10 + *(*pat)++ - '0';
-		if (**pat == ',') {
-			(*pat)++;
-			if ((*pat)[0] == '}')
-				rnode->maxcnt = -1;
-			while (isdigit((unsigned char) **pat))
-				rnode->maxcnt = rnode->maxcnt * 10 + *(*pat)++ - '0';
-		} else {
-			rnode->maxcnt = rnode->mincnt;
+		p = *pat + 1;
+		if (!isdigit((unsigned char) *p)) {
+			rnode_free(rnode);
+			return NULL;
 		}
-		++*pat;
+		while (isdigit((unsigned char) *p))
+			mincnt = mincnt * 10 + *p++ - '0';
+		if (*p == ',') {
+			p++;
+			if (*p == '}') {
+				maxcnt = -1;
+			} else {
+				if (!isdigit((unsigned char) *p)) {
+					rnode_free(rnode);
+					return NULL;
+				}
+				while (isdigit((unsigned char) *p))
+					maxcnt = maxcnt * 10 + *p++ - '0';
+			}
+		} else {
+			maxcnt = mincnt;
+		}
+		if (*p != '}' || (maxcnt >= 0 && maxcnt < mincnt)) {
+			rnode_free(rnode);
+			return NULL;
+		}
+		rnode->mincnt = mincnt;
+		rnode->maxcnt = maxcnt;
+		*pat = p + 1;
 	}
 	return rnode;
 }
@@ -620,12 +657,19 @@ static void rnode_emit(struct rnode *n, struct regex *p)
 
 int regcomp(regex_t *preg, char *pat, int flg)
 {
-	struct rnode *rnode = rnode_parse(&pat);
+	struct rnode *rnode;
 	struct regex *re;
-	int n = rnode_count(rnode) + 3;
+	int n;
 	int mark;
-	if (!rnode)
-		return 1;
+	if (!(flg & REG_EXTENDED))
+		return REG_BADPAT;
+	rnode = rnode_parse(&pat);
+	if (!rnode || *pat) {
+		if (rnode)
+			rnode_free(rnode);
+		return REG_BADPAT;
+	}
+	n = rnode_count(rnode) + 3;
 	rnode_grpnum(rnode, 1);
 	re = malloc(sizeof(*re));
 	memset(re, 0, sizeof(*re));
@@ -704,24 +748,31 @@ int regexec(regex_t *preg, char *s, int nsub, regmatch_t psub[], int flg)
 {
 	struct regex *re = *preg;
 	struct rstate rs;
-	char *o = s;
+	int execflg = re->flg | flg;
+	int nosub = !!(execflg & REG_NOSUB);
 	int i;
-	rstate_init(&rs, s, re->flg | flg, flg & REG_NOSUB ? 0 : nsub);
-	for (i = 0; i < nsub; i++) {
-		psub[i].rm_so = -1;
-		psub[i].rm_eo = -1;
-	}
-	while (*o) {
-		rs.s = o = s;
-		s += uc_len(s);
+	if (!psub || nsub <= 0)
+		nosub = 1;
+	rstate_init(&rs, s, execflg, nosub ? 0 : nsub);
+	if (!nosub)
+		for (i = 0; i < nsub; i++) {
+			psub[i].rm_so = -1;
+			psub[i].rm_eo = -1;
+		}
+	while (1) {
+		rs.s = s;
 		if (!re_recmatch(re, &rs)) {
-			rstate_marks(&rs, psub);
+			if (!nosub)
+				rstate_marks(&rs, psub);
 			rstate_done(&rs);
 			return 0;
 		}
+		if (!*s)
+			break;
+		s += uc_len(s);
 	}
 	rstate_done(&rs);
-	return 1;
+	return REG_NOMATCH;
 }
 
 int regerror(int errcode, regex_t *preg, char *errbuf, int errbuf_size)
